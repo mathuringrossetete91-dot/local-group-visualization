@@ -47,9 +47,9 @@ _log_dyn_pm   = np.log10(df_pm["mass_dynamical_wolf"].replace(0, np.nan))
 _log_dyn_nopm = np.log10(df_nopm["mass_dynamical_wolf"].replace(0, np.nan))
 _gmin = min(_log_dyn_pm.min(skipna=True), _log_dyn_nopm.min(skipna=True))
 _gmax = max(_log_dyn_pm.max(skipna=True), _log_dyn_nopm.max(skipna=True))
-_fb   = 4 + 18 * ((_log_dyn_pm.median(skipna=True) + _log_dyn_nopm.median(skipna=True)) / 2 - _gmin) / (_gmax - _gmin)
+_fb   = 2 + 7 * ((_log_dyn_pm.median(skipna=True) + _log_dyn_nopm.median(skipna=True)) / 2 - _gmin) / (_gmax - _gmin)
 
-def _size(s): return (4 + 18 * (s - _gmin) / (_gmax - _gmin)).fillna(_fb)
+def _size(s): return (2 + 7 * (s - _gmin) / (_gmax - _gmin)).fillna(_fb)
 
 df_pm["size_plot"]   = _size(_log_dyn_pm)
 df_nopm["size_plot"] = _size(_log_dyn_nopm)
@@ -97,6 +97,22 @@ df_pm["vx_gal"] = _dv.d_x.to(u.km / u.s).value
 df_pm["vy_gal"] = _dv.d_y.to(u.km / u.s).value
 df_pm["vz_gal"] = _dv.d_z.to(u.km / u.s).value
 df_pm["V3d"]    = np.sqrt(df_pm["vx_gal"]**2 + df_pm["vy_gal"]**2 + df_pm["vz_gal"]**2)
+
+# ── Pôles orbitaux : direction du moment angulaire L = r × v (galactocentrique) ──
+_r_gc = np.vstack([
+    gc.x.to(u.kpc).value, gc.y.to(u.kpc).value, gc.z.to(u.kpc).value
+]).T
+_v_gc = np.vstack([
+    gc.v_x.to(u.km / u.s).value, gc.v_y.to(u.km / u.s).value, gc.v_z.to(u.km / u.s).value
+]).T
+_Lvec  = np.cross(_r_gc, _v_gc)
+_Lnorm = np.linalg.norm(_Lvec, axis=1)
+_Lunit = np.divide(_Lvec, _Lnorm[:, None],
+                   out=np.zeros_like(_Lvec), where=_Lnorm[:, None] > 0)
+df_pm["pole_lon"] = np.degrees(np.arctan2(_Lunit[:, 1], _Lunit[:, 0]))
+df_pm["pole_lat"] = np.degrees(np.arcsin(np.clip(_Lunit[:, 2], -1.0, 1.0)))
+# Longitude tracée sur l'Aitoff (X = -l) avec décalage de 180°, repliée dans [-180, 180]
+df_pm["pole_lon_plot"] = ((-df_pm["pole_lon"] - 180.0 + 180.0) % 360.0) - 180.0
 
 fig = make_subplots(
     rows=1,
@@ -218,6 +234,14 @@ _m31_l, _m31_b, _m31_d = 121.17, -21.57, 785.0
 _m31_gx = _m31_d*np.cos(np.radians(_m31_b))*np.cos(np.radians(_m31_l))
 _m31_gy = _m31_d*np.cos(np.radians(_m31_b))*np.sin(np.radians(_m31_l))
 _m31_gz = _m31_d*np.sin(np.radians(_m31_b))
+# ── Repère M31 : base orthonormée (eZ = M31→MW, eY = pôle nord ⊥ eZ) ────────
+_m31_vec  = np.array([_m31_gx, _m31_gy, _m31_gz])
+_e_Z_m31  = -_m31_vec / np.linalg.norm(_m31_vec)
+_e_Y_m31  = np.array([0., 0., 1.]) - np.dot(np.array([0., 0., 1.]), _e_Z_m31) * _e_Z_m31
+_e_Y_m31 /= np.linalg.norm(_e_Y_m31)
+_e_X_m31  = np.cross(_e_Y_m31, _e_Z_m31)
+_e_X_m31 /= np.linalg.norm(_e_X_m31)
+_R_m31    = np.array([_e_X_m31, _e_Y_m31, _e_Z_m31])  # lignes = vecteurs de la base
 _n31, _e31 = _disk_normal_from_pa(
     _m31_l, _m31_b, _m31_d, 10.68, 41.27, inc_deg=77.5, pa_eq_deg=38.0)
 fig.add_trace(
@@ -334,7 +358,7 @@ fig.add_trace(
     go.Scatter3d(
         x=[None], y=[None], z=[None],
         mode="markers",
-        marker=dict(size=10, color="black", symbol="circle-open", line=dict(width=5)),
+        marker=dict(size=10, color="black", symbol="circle-open", line=dict(width=1)),
         name="without proper motion",
         legend="legend",
         meta={"panel": "3d", "is_ghost": True},
@@ -628,6 +652,7 @@ for hi_type in hi_colors.keys():
         continue
 
     text_pm = hover_pm(subset_pm)
+    _nm_pm  = subset_pm["name"].tolist()
 
     # ==================================================
     # 3D
@@ -660,7 +685,7 @@ for hi_type in hi_colors.keys():
 
             legendgroup=hi_type,
 
-            meta={"group": "pm"},
+            meta={"group": "pm", "names": _nm_pm},
 
             showlegend=False,
         ),
@@ -681,7 +706,7 @@ for hi_type in hi_colors.keys():
             textfont=dict(size=9, color="#333333"),
             hoverinfo="skip",
             legendgroup=hi_type,
-            meta={"group": "pm", "is_label": True},
+            meta={"group": "pm", "is_label": True, "names": _nm_pm},
             showlegend=False,
         ),
         row=1, col=1,
@@ -729,7 +754,7 @@ for hi_type in hi_colors.keys():
 
             legendgroup=hi_type,
 
-            meta={"group": "pm"},
+            meta={"group": "pm", "names": _nm_pm},
 
             showlegend=False,
         ),
@@ -749,10 +774,65 @@ for hi_type in hi_colors.keys():
             textfont=dict(size=8, color="#333333"),
             hoverinfo="skip",
             legendgroup=hi_type,
-            meta={"group": "pm", "is_label": True},
+            meta={"group": "pm", "is_label": True, "names": _nm_pm},
             showlegend=False,
         ),
         row=1, col=2,
+    )
+
+    # ==================================================
+    # AITOFF PÔLES ORBITAUX  (geo2, carte du haut)
+    # ==================================================
+
+    text_pole = (
+        subset_pm["name"]
+        + "<br>Orbital pole (L = r×v)"
+        + "<br>l = " + subset_pm["pole_lon"].round(1).astype(str) + "°"
+        + "<br>b = " + subset_pm["pole_lat"].round(1).astype(str) + "°"
+    )
+
+    fig.add_trace(
+        go.Scattergeo(
+            geo="geo2",
+            lon=subset_pm["pole_lon_plot"],
+            lat=subset_pm["pole_lat"],
+            mode="markers",
+            marker=dict(
+                size=subset_pm["size_plot"],
+                color=hi_colors[hi_type],
+                symbol="circle",
+                opacity=0.95,
+                line=dict(width=0.5, color="black"),
+            ),
+            text=text_pole,
+            hovertemplate="%{text}<extra></extra>",
+            customdata=list(zip(
+                subset_pm["name"].tolist(),
+                subset_pm["gx"].round(2).tolist(),
+                subset_pm["gy"].round(2).tolist(),
+                subset_pm["gz"].round(2).tolist(),
+            )),
+            legendgroup=hi_type,
+            meta={"group": "pm", "is_pole": True, "names": _nm_pm},
+            showlegend=False,
+        ),
+    )
+
+    # étiquettes noms pôles orbitaux (geo2)
+    fig.add_trace(
+        go.Scattergeo(
+            geo="geo2",
+            lon=subset_pm["pole_lon_plot"],
+            lat=subset_pm["pole_lat"],
+            mode="text",
+            text=subset_pm["name_short"].tolist(),
+            textposition="top center",
+            textfont=dict(size=8, color="#333333"),
+            hoverinfo="skip",
+            legendgroup=hi_type,
+            meta={"group": "pm", "is_label": True, "is_pole": True, "names": _nm_pm},
+            showlegend=False,
+        ),
     )
 
 # ======================================================
@@ -769,6 +849,7 @@ for hi_type in hi_colors.keys():
         continue
 
     text_nopm = hover_nopm(subset_nopm)
+    _nm_nopm  = subset_nopm["name"].tolist()
 
     # ==================================================
     # 3D
@@ -790,7 +871,7 @@ for hi_type in hi_colors.keys():
             text=text_nopm,
             hovertemplate="%{text}<extra></extra>",
             legendgroup=hi_type,
-            meta={"group": "nopm"},
+            meta={"group": "nopm", "names": _nm_nopm},
             showlegend=False,
         ),
         row=1, col=1,
@@ -811,7 +892,7 @@ for hi_type in hi_colors.keys():
             ),
             hoverinfo="skip",
             legendgroup=hi_type,
-            meta={"group": "nopm"},
+            meta={"group": "nopm", "names": _nm_nopm},
             showlegend=False,
         ),
         row=1, col=1,
@@ -829,7 +910,7 @@ for hi_type in hi_colors.keys():
             textfont=dict(size=9, color="#333333"),
             hoverinfo="skip",
             legendgroup=hi_type,
-            meta={"group": "nopm", "is_label": True},
+            meta={"group": "nopm", "is_label": True, "names": _nm_nopm},
             showlegend=False,
         ),
         row=1, col=1,
@@ -877,7 +958,7 @@ for hi_type in hi_colors.keys():
 
             legendgroup=hi_type,
 
-            meta={"group": "nopm"},
+            meta={"group": "nopm", "names": _nm_nopm},
 
             showlegend=False,
         ),
@@ -897,7 +978,7 @@ for hi_type in hi_colors.keys():
             textfont=dict(size=8, color="#333333"),
             hoverinfo="skip",
             legendgroup=hi_type,
-            meta={"group": "nopm", "is_label": True},
+            meta={"group": "nopm", "is_label": True, "names": _nm_nopm},
             showlegend=False,
         ),
         row=1, col=2,
@@ -994,6 +1075,7 @@ for hi_type in hi_colors.keys():
 
     lon_hi = []
     lat_hi = []
+    names_hi = []
 
     for i in idx_hi:
 
@@ -1008,6 +1090,7 @@ for hi_type in hi_colors.keys():
 
         lon_hi.extend(list(-lon_a) + [None])
         lat_hi.extend(list(lat_a)  + [None])
+        names_hi.extend([df_pm.loc[i, "name"]] * len(lon_a) + [None])
 
     if not lon_hi:
         continue
@@ -1020,7 +1103,7 @@ for hi_type in hi_colors.keys():
             line=dict(color="rgba(180,40,40,0.85)", width=1.4),
             hoverinfo="skip",
             legendgroup=hi_type,
-            meta={"group": "pm", "is_velocity": True, "hi_type": hi_type},
+            meta={"group": "pm", "is_velocity": True, "hi_type": hi_type, "names": names_hi},
             showlegend=False,
         ),
         row=1, col=2,
@@ -1084,7 +1167,7 @@ fig.add_trace(
         x=[None], y=[None], z=[None],
         mode="markers+text",
         marker=dict(
-            size=22,
+            size=12,
             color="yellow",
             symbol="diamond",
             line=dict(color="black", width=2),
@@ -1121,6 +1204,7 @@ for hi_type in hi_colors.keys():
         continue
 
     _xs, _ys, _zs = [], [], []
+    _nms_v = []
 
     for _i in _sub.index:
         _v  = _sub.loc[_i, "V3d"]
@@ -1131,6 +1215,7 @@ for hi_type in hi_colors.keys():
         _xs.extend([_x0, _x0 + _sc * _sub.loc[_i, "vx_gal"], None])
         _ys.extend([_y0, _y0 + _sc * _sub.loc[_i, "vy_gal"], None])
         _zs.extend([_z0, _z0 + _sc * _sub.loc[_i, "vz_gal"], None])
+        _nms_v.extend([_sub.loc[_i, "name"], _sub.loc[_i, "name"], None])
 
     fig.add_trace(
         go.Scatter3d(
@@ -1140,7 +1225,7 @@ for hi_type in hi_colors.keys():
             opacity=0.75,
             hoverinfo="skip",
             legendgroup="velocity_3d",
-            meta={"is_velocity": True, "hi_type": hi_type},
+            meta={"is_velocity": True, "hi_type": hi_type, "names": _nms_v},
             showlegend=False,
         ),
         row=1, col=1,
@@ -1163,14 +1248,21 @@ X0_GEO, X1_GEO = 0.67, 0.99
 _BAR = 0.04
 
 Y0_3D,  Y1_3D  = 0.02, 0.97          # corps du panneau 3D (sous la barre)
-Y0_GEO, Y1_GEO = 0.02, 0.46          # corps du panneau Aitoff
+
+# Deux cartes Aitoff empilées dans la colonne de droite :
+#   geo  (bas)  = positions (l, b)
+#   geo2 (haut) = pôles orbitaux (L = r × v)
+Y0_GEO,  Y1_GEO  = 0.02, 0.43         # corps Aitoff bas  (positions)
+Y0_GEO2, Y1_GEO2 = 0.52, 0.93         # corps Aitoff haut (pôles orbitaux)
 Y0_PANELS = Y0_3D                    # alias conservé pour scene domain
 
 # barres de titre (bande haute de chaque panneau)
-_Y0_BAR_3D  = Y1_3D  + 0.001
-_Y1_BAR_3D  = Y1_3D  + _BAR + 0.001
-_Y0_BAR_GEO = Y1_GEO + 0.001
-_Y1_BAR_GEO = Y1_GEO + _BAR + 0.001
+_Y0_BAR_3D   = Y1_3D   + 0.001
+_Y1_BAR_3D   = Y1_3D   + _BAR + 0.001
+_Y0_BAR_GEO  = Y1_GEO  + 0.001
+_Y1_BAR_GEO  = Y1_GEO  + _BAR + 0.001
+_Y0_BAR_GEO2 = Y1_GEO2 + 0.001
+_Y1_BAR_GEO2 = Y1_GEO2 + _BAR + 0.001
 
 # zone légende
 _Y0_LEG = Y1_GEO + _BAR + 0.025
@@ -1215,9 +1307,9 @@ fig.update_layout(
         borderwidth=1,
         font=dict(size=10, color="#1a1a2e"),
         x=X1_GEO - 0.005,
-        y=_Y1_BAR_GEO + 0.01,
+        y=Y1_GEO2 - 0.005,
         xanchor="right",
-        yanchor="bottom",
+        yanchor="top",
         groupclick="toggleitem",
         tracegroupgap=2,
     ),
@@ -1235,11 +1327,38 @@ fig.update_layout(
     ),
 
     # --------------------------------------------------
-    # Aitoff  — panneau bas-droit
+    # Aitoff  — panneau bas-droit (positions)
     # --------------------------------------------------
     geo=dict(
         projection_type="aitoff",
         domain=dict(x=[X0_GEO, X1_GEO], y=[Y0_GEO, Y1_GEO]),
+        showland=False,
+        showcoastlines=False,
+        showcountries=False,
+        showframe=True,
+        framecolor="#8899aa",
+        showocean=False,
+        bgcolor="white",
+        lonaxis=dict(
+            showgrid=True,
+            gridcolor="rgba(80,100,130,0.18)",
+            gridwidth=0.6,
+            dtick=30,
+        ),
+        lataxis=dict(
+            showgrid=True,
+            gridcolor="rgba(80,100,130,0.18)",
+            gridwidth=0.6,
+            dtick=15,
+        ),
+    ),
+
+    # --------------------------------------------------
+    # Aitoff pôles orbitaux  — panneau haut-droit
+    # --------------------------------------------------
+    geo2=dict(
+        projection_type="aitoff",
+        domain=dict(x=[X0_GEO, X1_GEO], y=[Y0_GEO2, Y1_GEO2]),
         showland=False,
         showcoastlines=False,
         showcountries=False,
@@ -1307,6 +1426,27 @@ fig.update_layout(
             fillcolor="#1a3a5c",
             layer="above",
         ),
+
+        # ── Cadre panneau Aitoff pôles orbitaux ───────
+        dict(
+            type="rect",
+            xref="paper", yref="paper",
+            x0=X0_GEO - 0.005, x1=X1_GEO + 0.005,
+            y0=Y0_GEO2 - 0.005, y1=_Y1_BAR_GEO2 + 0.002,
+            line=dict(color="#8899aa", width=1.5),
+            fillcolor="white",
+            layer="below",
+        ),
+        # barre de titre Aitoff pôles orbitaux
+        dict(
+            type="rect",
+            xref="paper", yref="paper",
+            x0=X0_GEO - 0.005, x1=X1_GEO + 0.005,
+            y0=_Y0_BAR_GEO2 - 0.001, y1=_Y1_BAR_GEO2 + 0.002,
+            line=dict(width=0),
+            fillcolor="#1a3a5c",
+            layer="above",
+        ),
     ],
 
     # --------------------------------------------------
@@ -1326,9 +1466,19 @@ fig.update_layout(
                       family="Arial Black"),
         ),
         dict(
-            text="AITOFF PROJECTION",
+            text="AITOFF — POSITIONS (l, b)",
             x=(X0_GEO + X1_GEO) / 2,
             y=(_Y0_BAR_GEO + _Y1_BAR_GEO) / 2 + 0.001,
+            xref="paper", yref="paper",
+            xanchor="center", yanchor="middle",
+            showarrow=False,
+            font=dict(size=13, color="white",
+                      family="Arial Black"),
+        ),
+        dict(
+            text="AITOFF — ORBITAL POLES (L = r×v)",
+            x=(X0_GEO + X1_GEO) / 2,
+            y=(_Y0_BAR_GEO2 + _Y1_BAR_GEO2) / 2 + 0.001,
             xref="paper", yref="paper",
             xanchor="center", yanchor="middle",
             showarrow=False,
@@ -1419,6 +1569,30 @@ _JS = """
         var _geoScale = 1.0;        // niveau de zoom Aitoff courant
         var _geoCenterLon = 0, _geoCenterLat = 0; // centre courant de la projection Aitoff
         var _panStart = null;       // état drag-to-pan
+        var _m31OrigCache = null;   // cache coordonnées originales (mode M31)
+
+        // Rectangle réel (pixels client) du panneau Aitoff tel qu'affiché.
+        // On le lit directement dans le DOM (fond blanc du sous-graphe geo) :
+        // la zone de pan/zoom suit donc toujours exactement le panneau Aitoff,
+        // quelle que soit la taille / le ratio de la page, et n'empiète jamais
+        // sur la vue 3D.
+        // Deux cartes Aitoff sont empilées (geo = positions en bas,
+        // geo2 = pôles orbitaux en haut). Le pan/zoom ne pilote que la
+        // carte du bas (geo) : on sélectionne donc le fond le plus bas à
+        // l'écran (plus grand "top" en coords client).
+        function _geoClientRect() {
+            var bgs = gd.querySelectorAll('.geolayer .bg');
+            if (bgs.length) {
+                var best = null;
+                for (var i = 0; i < bgs.length; i++) {
+                    var r = bgs[i].getBoundingClientRect();
+                    if (!best || r.top > best.top) best = r;
+                }
+                return best;
+            }
+            var g = gd.querySelector('.geo');
+            return g ? g.getBoundingClientRect() : null;
+        }
 
         // Met à jour la longueur de la barre d'échelle V_tan selon le zoom Aitoff.
         // La barre est en coords "paper" ; on borne pour ne pas déborder du panneau.
@@ -1577,12 +1751,10 @@ _JS = """
         gd.addEventListener('mousedown', function(e) {
             if (e.button !== 0) return;
             if (!gd._fullLayout || !gd._fullLayout.geo) return;
-            var rect  = gd.getBoundingClientRect();
-            var xFrac = (e.clientX - rect.left)  / rect.width;
-            var yFrac = 1 - (e.clientY - rect.top) / rect.height;
-            var xd = gd._fullLayout.geo.domain.x;
-            var yd = gd._fullLayout.geo.domain.y;
-            if (xFrac < xd[0] || xFrac > xd[1] || yFrac < yd[0] || yFrac > yd[1]) return;
+            var gr = _geoClientRect();
+            if (!gr) return;
+            if (e.clientX < gr.left || e.clientX > gr.right ||
+                e.clientY < gr.top  || e.clientY > gr.bottom) return;
             // Pas de preventDefault ici → les clics sur les points Aitoff restent actifs
             _panStart = {x: e.clientX, y: e.clientY, lon: _geoCenterLon, lat: _geoCenterLat, moved: false};
         }, true);  // capture phase
@@ -1593,11 +1765,9 @@ _JS = """
             var dy = e.clientY - _panStart.y;
             if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return;  // seuil : ne pas déclencher sur simple clic
             _panStart.moved = true;
-            var rect  = gd.getBoundingClientRect();
-            var xd    = gd._fullLayout.geo.domain.x;
-            var yd    = gd._fullLayout.geo.domain.y;
-            var domW  = (xd[1] - xd[0]) * rect.width;
-            var domH  = (yd[1] - yd[0]) * rect.height;
+            var gr = _geoClientRect();
+            if (!gr) return;
+            var domW = gr.width, domH = gr.height;
             // pixels → degrés (ajusté par le facteur de zoom)
             _geoCenterLon = _panStart.lon - dx * (360 / (domW * _geoScale));
             _geoCenterLat = Math.max(-85, Math.min(85,
@@ -1613,12 +1783,10 @@ _JS = """
         // ── Zoom molette sur la projection Aitoff ──────────────────────────
         gd.addEventListener('wheel', function(e) {
             if (!gd._fullLayout || !gd._fullLayout.geo) return;
-            var rect  = gd.getBoundingClientRect();
-            var xFrac = (e.clientX - rect.left)  / rect.width;
-            var yFrac = 1 - (e.clientY - rect.top) / rect.height;
-            var xd = gd._fullLayout.geo.domain.x;
-            var yd = gd._fullLayout.geo.domain.y;
-            if (xFrac < xd[0] || xFrac > xd[1] || yFrac < yd[0] || yFrac > yd[1]) return;
+            var gr = _geoClientRect();
+            if (!gr) return;
+            if (e.clientX < gr.left || e.clientX > gr.right ||
+                e.clientY < gr.top  || e.clientY > gr.bottom) return;
             e.preventDefault();
             e.stopPropagation();
             var factor = e.deltaY > 0 ? 0.85 : 1.15;
@@ -1648,36 +1816,80 @@ _JS = """
         _btnM31.style.cssText = _btnSt + 'background:white;color:#1a3a5c;';
         _btnM31.onclick = function() {
             _setActiveNav('m31');
-            // L_local doit tenir dans la vue (z) : L_local * tip < z
-            var z = 700, L_local = 600, tip = 1.06;
-            var updates = [];
-            for (var i = 0; i < gd.data.length; i++) {
-                var d = gd.data[i];
-                if (!d.meta) continue;
-                if (d.meta.is_axis) {
-                    var ax = d.meta.axis;
-                    updates.push({i: i,
-                        x: ax==='X' ? [_M31_GX-L_local, _M31_GX+L_local] : [_M31_GX, _M31_GX],
-                        y: ax==='Y' ? [_M31_GY-L_local, _M31_GY+L_local] : [_M31_GY, _M31_GY],
-                        z: ax==='Z' ? [_M31_GZ-L_local, _M31_GZ+L_local] : [_M31_GZ, _M31_GZ],
-                    });
-                } else if (d.meta.is_axis_label) {
-                    var ax = d.meta.axis;
-                    updates.push({i: i,
-                        x: ax==='X' ? [_M31_GX-L_local*tip, _M31_GX+L_local*tip] : [_M31_GX, _M31_GX],
-                        y: ax==='Y' ? [_M31_GY-L_local*tip, _M31_GY+L_local*tip] : [_M31_GY, _M31_GY],
-                        z: ax==='Z' ? [_M31_GZ-L_local*tip, _M31_GZ+L_local*tip] : [_M31_GZ, _M31_GZ],
-                    });
+            var L = 1100, tip = 1.06;
+            var r = _R_M31, ox = _M31_GX, oy = _M31_GY, oz = _M31_GZ;
+            // Construction du cache des coordonnées originales (une seule fois)
+            if (!_m31OrigCache) {
+                _m31OrigCache = [];
+                for (var i = 0; i < gd.data.length; i++) {
+                    var d = gd.data[i];
+                    if (d.type === 'scatter3d' || d.type === 'mesh3d') {
+                        _m31OrigCache[i] = {
+                            x: _arr(d.x).slice(),
+                            y: _arr(d.y).slice(),
+                            z: _arr(d.z).slice(),
+                            text: Array.isArray(d.text) ? d.text.slice() : d.text
+                        };
+                    }
                 }
             }
-            for (var k = 0; k < updates.length; k++) {
-                Plotly.restyle(gd, {x: [updates[k].x], y: [updates[k].y], z: [updates[k].z]}, [updates[k].i]);
+            // Applique p' = R * (p - M31) à chaque trace 3D
+            for (var i = 0; i < gd.data.length; i++) {
+                var d = gd.data[i];
+                if (d.type !== 'scatter3d' && d.type !== 'mesh3d') continue;
+                var orig = _m31OrigCache[i];
+                if (!orig) continue;
+                var meta = d.meta || {};
+                if (meta.is_axis) {
+                    var ax = meta.axis;
+                    Plotly.restyle(gd, {
+                        x: [ax==='X' ? [-L, L] : [0, 0]],
+                        y: [ax==='Y' ? [-L, L] : [0, 0]],
+                        z: [ax==='Z' ? [-L, L] : [0, 0]],
+                    }, [i]);
+                } else if (meta.is_axis_label) {
+                    var ax2 = meta.axis;
+                    Plotly.restyle(gd, {
+                        x: [ax2==='X' ? [-L*tip, L*tip] : [0, 0]],
+                        y: [ax2==='Y' ? [-L*tip, L*tip] : [0, 0]],
+                        z: [ax2==='Z' ? [-L*tip, L*tip] : [0, 0]],
+                    }, [i]);
+                } else {
+                    var xs = orig.x, ys = orig.y, zs = orig.z;
+                    var nx = [], ny = [], nz = [];
+                    for (var k = 0; k < xs.length; k++) {
+                        if (xs[k] == null || isNaN(+xs[k])) {
+                            nx.push(null); ny.push(null); nz.push(null); continue;
+                        }
+                        var dx = xs[k]-ox, dy = ys[k]-oy, dz = zs[k]-oz;
+                        nx.push(r[0]*dx + r[1]*dy + r[2]*dz);
+                        ny.push(r[3]*dx + r[4]*dy + r[5]*dz);
+                        nz.push(r[6]*dx + r[7]*dy + r[8]*dz);
+                    }
+                    var _restyle = {x: [nx], y: [ny], z: [nz]};
+                    // Hover : afficher les coordonnées dans le repère M31.
+                    // On réécrit le bloc « X/Y/Z » du texte d'origine avec les
+                    // valeurs M31 (nx, ny, nz) déjà calculées ci-dessus.
+                    if (Array.isArray(orig.text)) {
+                        var nt = orig.text.slice();
+                        for (var t = 0; t < nt.length; t++) {
+                            if (typeof nt[t] !== 'string' || nx[t] == null) continue;
+                            var bloc = '<br>X : ' + nx[t].toFixed(1) + ' kpc (M31)' +
+                                       '<br>Y : ' + ny[t].toFixed(1) + ' kpc' +
+                                       '<br>Z : ' + nz[t].toFixed(1) + ' kpc';
+                            nt[t] = nt[t].replace(
+                                /<br>X : [^<]*<br>Y : [^<]*<br>Z : [^<]*kpc/, bloc);
+                        }
+                        _restyle.text = [nt];
+                    }
+                    Plotly.restyle(gd, _restyle, [i]);
+                }
             }
             Plotly.relayout(gd, {
-                'scene.xaxis.range': [_M31_GX - z, _M31_GX + z],
-                'scene.yaxis.range': [_M31_GY - z, _M31_GY + z],
-                'scene.zaxis.range': [_M31_GZ - z, _M31_GZ + z],
-                'scene.aspectmode': 'cube',
+                'scene.xaxis.autorange': true,
+                'scene.yaxis.autorange': true,
+                'scene.zaxis.autorange': true,
+                'scene.aspectmode': 'data',
             });
         };
 
@@ -1688,24 +1900,56 @@ _JS = """
         _btnReset.onclick = function() {
             _setActiveNav('mw');
             var L = 1100, tip = 1.06;
-            // Remettre les axes à l'origine
-            for (var i = 0; i < gd.data.length; i++) {
-                var d = gd.data[i];
-                if (!d.meta) continue;
-                if (d.meta.is_axis) {
-                    var ax = d.meta.axis;
-                    Plotly.restyle(gd, {
-                        x: [ax==='X' ? [-L, L] : [0, 0]],
-                        y: [ax==='Y' ? [-L, L] : [0, 0]],
-                        z: [ax==='Z' ? [-L, L] : [0, 0]],
-                    }, [i]);
-                } else if (d.meta.is_axis_label) {
-                    var ax = d.meta.axis;
-                    Plotly.restyle(gd, {
-                        x: [ax==='X' ? [-L*tip, L*tip] : [0, 0]],
-                        y: [ax==='Y' ? [-L*tip, L*tip] : [0, 0]],
-                        z: [ax==='Z' ? [-L*tip, L*tip] : [0, 0]],
-                    }, [i]);
+            if (_m31OrigCache) {
+                // Restaurer toutes les traces depuis le cache
+                for (var i = 0; i < gd.data.length; i++) {
+                    var orig = _m31OrigCache[i];
+                    if (!orig) continue;
+                    var d = gd.data[i];
+                    var meta = d.meta || {};
+                    if (meta.is_axis) {
+                        var ax = meta.axis;
+                        Plotly.restyle(gd, {
+                            x: [ax==='X' ? [-L, L] : [0, 0]],
+                            y: [ax==='Y' ? [-L, L] : [0, 0]],
+                            z: [ax==='Z' ? [-L, L] : [0, 0]],
+                        }, [i]);
+                    } else if (meta.is_axis_label) {
+                        var ax2 = meta.axis;
+                        Plotly.restyle(gd, {
+                            x: [ax2==='X' ? [-L*tip, L*tip] : [0, 0]],
+                            y: [ax2==='Y' ? [-L*tip, L*tip] : [0, 0]],
+                            z: [ax2==='Z' ? [-L*tip, L*tip] : [0, 0]],
+                        }, [i]);
+                    } else {
+                        var _rs = {
+                            x: [orig.x.slice()], y: [orig.y.slice()], z: [orig.z.slice()]
+                        };
+                        // Restaurer aussi le hover d'origine (coords Voie Lactée)
+                        if (Array.isArray(orig.text)) _rs.text = [orig.text.slice()];
+                        Plotly.restyle(gd, _rs, [i]);
+                    }
+                }
+            } else {
+                // Pas encore de cache : juste réinitialiser les axes
+                for (var i = 0; i < gd.data.length; i++) {
+                    var d = gd.data[i];
+                    if (!d.meta) continue;
+                    if (d.meta.is_axis) {
+                        var ax = d.meta.axis;
+                        Plotly.restyle(gd, {
+                            x: [ax==='X' ? [-L, L] : [0, 0]],
+                            y: [ax==='Y' ? [-L, L] : [0, 0]],
+                            z: [ax==='Z' ? [-L, L] : [0, 0]],
+                        }, [i]);
+                    } else if (d.meta.is_axis_label) {
+                        var ax2 = d.meta.axis;
+                        Plotly.restyle(gd, {
+                            x: [ax2==='X' ? [-L*tip, L*tip] : [0, 0]],
+                            y: [ax2==='Y' ? [-L*tip, L*tip] : [0, 0]],
+                            z: [ax2==='Z' ? [-L*tip, L*tip] : [0, 0]],
+                        }, [i]);
+                    }
                 }
             }
             Plotly.relayout(gd, {
@@ -1717,10 +1961,509 @@ _JS = """
         };
 
         var _nav = document.createElement('div');
-        _nav.style.cssText = 'position:fixed;top:55px;left:12px;z-index:1000;display:flex;flex-direction:column;gap:5px;';
+        _nav.style.cssText = 'display:flex;flex-direction:row;gap:5px;';
         _nav.appendChild(_btnM31);
         _nav.appendChild(_btnReset);
-        document.body.appendChild(_nav);
+
+        // ── Barre de recherche de galaxie ──────────────────────────────────
+        // Indexe tous les noms depuis les customdata des traces Aitoff
+        // (chaque entrée = [name, gx, gy, gz]). Réutilise la trace
+        // __highlight__ pour mettre en évidence la galaxie trouvée en 3D.
+        var _nameIndex = {};   // nom (minuscule) → {name, x, y, z}
+        var _allNames = [];
+        for (var i = 0; i < gd.data.length; i++) {
+            var d = gd.data[i];
+            if (d.type === 'scattergeo' && d.customdata) {
+                for (var j = 0; j < d.customdata.length; j++) {
+                    var cd = d.customdata[j];
+                    if (!cd || cd.length < 4 || !cd[0]) continue;
+                    var key = String(cd[0]).toLowerCase();
+                    if (!(key in _nameIndex)) {
+                        _nameIndex[key] = {name: cd[0], x: cd[1], y: cd[2], z: cd[3]};
+                        _allNames.push(cd[0]);
+                    }
+                }
+            }
+        }
+        _allNames.sort(function(a, b) { return a.toLowerCase() < b.toLowerCase() ? -1 : 1; });
+
+        function _highlightIndex() {
+            for (var i = 0; i < gd.data.length; i++) {
+                if (gd.data[i].name === '__highlight__') return i;
+            }
+            return -1;
+        }
+
+        // Surligne une galaxie par son nom (exact, sinon 1ère correspondance partielle).
+        function _searchGalaxy(query) {
+            var key = (query || '').toLowerCase().trim();
+            if (!key) return false;
+            var rec = _nameIndex[key];
+            if (!rec) {
+                for (var k = 0; k < _allNames.length; k++) {
+                    if (_allNames[k].toLowerCase().indexOf(key) >= 0) {
+                        rec = _nameIndex[_allNames[k].toLowerCase()];
+                        break;
+                    }
+                }
+            }
+            var hi = _highlightIndex();
+            if (hi < 0 || !rec) return false;
+            _lastHighlight = rec.name;
+            Plotly.restyle(gd, {x: [[rec.x]], y: [[rec.y]], z: [[rec.z]], text: [[rec.name]]}, [hi]);
+            return true;
+        }
+
+        // Liste d'autocomplétion (noms de galaxies)
+        var _dl = document.createElement('datalist');
+        _dl.id = '_galaxyList';
+        for (var n = 0; n < _allNames.length; n++) {
+            var _opt = document.createElement('option');
+            _opt.value = _allNames[n];
+            _dl.appendChild(_opt);
+        }
+        document.body.appendChild(_dl);
+
+        var _searchInput = document.createElement('input');
+        _searchInput.type = 'text';
+        _searchInput.placeholder = 'Search galaxy\u2026';
+        _searchInput.setAttribute('list', '_galaxyList');
+        _searchInput.style.cssText = 'font-size:11px;font-family:Arial;padding:4px 6px;' +
+            'border:1px solid #8899aa;border-radius:3px;width:150px;outline:none;';
+
+        var _searchBtn = document.createElement('button');
+        _searchBtn.textContent = 'Find';
+        _searchBtn.title = 'Surligner la galaxie en 3D';
+        _searchBtn.style.cssText = _btnSt + 'background:#1a3a5c;color:white;';
+
+        var _searchMsg = document.createElement('span');
+        _searchMsg.style.cssText = 'font-size:10px;font-family:Arial;color:#c0392b;min-width:55px;';
+
+        function _doSearch() {
+            var ok = _searchGalaxy(_searchInput.value);
+            _searchMsg.textContent = ok ? '' : 'not found';
+        }
+        _searchBtn.onclick = _doSearch;
+        _searchInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); _doSearch(); }
+        });
+        _searchInput.addEventListener('change', _doSearch);
+
+        var _searchWrap = document.createElement('div');
+        _searchWrap.style.cssText = 'display:flex;gap:5px;align-items:center;';
+        _searchWrap.appendChild(_searchInput);
+        _searchWrap.appendChild(_searchBtn);
+        _searchWrap.appendChild(_searchMsg);
+
+        // ── Filtre par rayon autour d'un objet de référence ──────────────
+        // Cache des coordonnées d'origine de chaque trace filtrable
+        // (toute trace portant meta.names : marqueurs, étiquettes, flèches,
+        //  pôles, en 3D comme en Aitoff). Le filtre masque, point par point,
+        //  les entrées dont la galaxie est au-delà du rayon ; les repères
+        //  MW / M31 / M33 (sans meta.names) restent toujours visibles.
+        var _origCache = null;
+        // Plotly encode souvent les coordonnées numériques en tableaux typés
+        // base64 ({dtype, bdata}). _arr() renvoie toujours un tableau JS simple,
+        // quel que soit le format de stockage (array, typed-array, base64).
+        function _arr(v) {
+            if (v == null) return [];
+            if (Array.isArray(v)) return v.slice();
+            if (ArrayBuffer.isView(v)) return Array.from(v);
+            if (v._inputArray) return Array.from(v._inputArray);
+            if (v.bdata !== undefined && v.dtype) {
+                var bin = atob(v.bdata), n = bin.length;
+                var bytes = new Uint8Array(n);
+                for (var i = 0; i < n; i++) bytes[i] = bin.charCodeAt(i);
+                var TA = {f8: Float64Array, f4: Float32Array, i4: Int32Array,
+                          i2: Int16Array, i1: Int8Array, u1: Uint8Array,
+                          u2: Uint16Array, u4: Uint32Array}[v.dtype] || Float64Array;
+                return Array.from(new TA(bytes.buffer));
+            }
+            return [];
+        }
+        function _buildOrigCache() {
+            _origCache = [];
+            for (var i = 0; i < gd.data.length; i++) {
+                var d = gd.data[i];
+                if (!d.meta || !d.meta.names) continue;
+                if (d.type === 'scattergeo') {
+                    _origCache.push({i: i, geo: true,
+                        lon: _arr(d.lon), lat: _arr(d.lat),
+                        names: d.meta.names});
+                } else {
+                    _origCache.push({i: i, geo: false,
+                        x: _arr(d.x), y: _arr(d.y), z: _arr(d.z),
+                        names: d.meta.names});
+                }
+            }
+        }
+
+        function _applyRadiusFilter(refName, radius) {
+            if (!_origCache) _buildOrigCache();
+            var ref = _POS[refName];
+            if (!ref) return;
+            for (var c = 0; c < _origCache.length; c++) {
+                var e = _origCache[c], nm = e.names;
+                if (e.geo) {
+                    var lon = e.lon.slice(), lat = e.lat.slice();
+                    for (var k = 0; k < nm.length; k++) {
+                        var p = nm[k] ? _POS[nm[k]] : null;
+                        if (!p) continue;
+                        var dx = p[0]-ref[0], dy = p[1]-ref[1], dz = p[2]-ref[2];
+                        if (Math.sqrt(dx*dx+dy*dy+dz*dz) > radius) { lon[k] = null; lat[k] = null; }
+                    }
+                    Plotly.restyle(gd, {lon: [lon], lat: [lat]}, [e.i]);
+                } else {
+                    var X = e.x.slice(), Y = e.y.slice(), Z = e.z.slice();
+                    for (var k2 = 0; k2 < nm.length; k2++) {
+                        var p2 = nm[k2] ? _POS[nm[k2]] : null;
+                        if (!p2) continue;
+                        var ax = p2[0]-ref[0], ay = p2[1]-ref[1], az = p2[2]-ref[2];
+                        if (Math.sqrt(ax*ax+ay*ay+az*az) > radius) { X[k2] = null; Y[k2] = null; Z[k2] = null; }
+                    }
+                    Plotly.restyle(gd, {x: [X], y: [Y], z: [Z]}, [e.i]);
+                }
+            }
+        }
+
+        function _resetRadiusFilter() {
+            if (!_origCache) return;
+            for (var c = 0; c < _origCache.length; c++) {
+                var e = _origCache[c];
+                if (e.geo) Plotly.restyle(gd, {lon: [e.lon.slice()], lat: [e.lat.slice()]}, [e.i]);
+                else       Plotly.restyle(gd, {x: [e.x.slice()], y: [e.y.slice()], z: [e.z.slice()]}, [e.i]);
+            }
+        }
+
+        // Contrôles du filtre par rayon (objet de référence + distance kpc).
+        var _filterLabel = document.createElement('span');
+        _filterLabel.textContent = 'Within';
+        _filterLabel.style.cssText = 'font-size:11px;font-family:Arial;color:#1a3a5c;font-weight:bold;';
+
+        var _radInput = document.createElement('input');
+        _radInput.type = 'number'; _radInput.min = '0'; _radInput.step = '10';
+        _radInput.value = '500';
+        _radInput.title = 'Rayon en kpc';
+        _radInput.style.cssText = 'font-size:11px;font-family:Arial;padding:4px 6px;' +
+            'border:1px solid #8899aa;border-radius:3px;width:70px;outline:none;';
+
+        var _radUnit = document.createElement('span');
+        _radUnit.textContent = 'kpc of';
+        _radUnit.style.cssText = 'font-size:11px;font-family:Arial;color:#1a3a5c;';
+
+        var _refSelect = document.createElement('select');
+        _refSelect.title = 'Objet de référence du filtre';
+        _refSelect.style.cssText = 'font-size:11px;font-family:Arial;padding:4px 6px;' +
+            'border:1px solid #8899aa;border-radius:3px;max-width:150px;outline:none;';
+        for (var r = 0; r < _REF_NAMES.length; r++) {
+            var _o = document.createElement('option');
+            _o.value = _REF_NAMES[r]; _o.textContent = _REF_NAMES[r];
+            _refSelect.appendChild(_o);
+        }
+
+        var _filterBtn = document.createElement('button');
+        _filterBtn.textContent = 'Filter';
+        _filterBtn.title = 'Masquer les galaxies au-delà du rayon';
+        _filterBtn.style.cssText = _btnSt + 'background:#1a3a5c;color:white;';
+        _filterBtn.onclick = function() {
+            var rad = parseFloat(_radInput.value);
+            if (isNaN(rad) || rad <= 0) return;
+            _applyRadiusFilter(_refSelect.value, rad);
+        };
+
+        var _filterClear = document.createElement('button');
+        _filterClear.textContent = 'All';
+        _filterClear.title = 'Afficher toutes les galaxies';
+        _filterClear.style.cssText = _btnSt + 'background:white;color:#1a3a5c;';
+        _filterClear.onclick = function() { _resetRadiusFilter(); };
+
+        _radInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); _filterBtn.onclick(); }
+        });
+
+        var _filterWrap = document.createElement('div');
+        _filterWrap.style.cssText = 'display:flex;gap:5px;align-items:center;flex-wrap:wrap;';
+        _filterWrap.appendChild(_filterLabel);
+        _filterWrap.appendChild(_radInput);
+        _filterWrap.appendChild(_radUnit);
+        _filterWrap.appendChild(_refSelect);
+        _filterWrap.appendChild(_filterBtn);
+        _filterWrap.appendChild(_filterClear);
+
+        // ── Upload de fichier (CSV) : afficher des objets externes ──────────
+        // Lit un fichier CSV/TXT côté navigateur, demande les noms des colonnes
+        // X / Y / Z (positions galactiques cartésiennes, en kpc) et ajoute les
+        // objets dans la vue 3D et sur la carte Aitoff.
+        var _uploadInput = document.createElement('input');
+        _uploadInput.type = 'file';
+        _uploadInput.accept = '.csv,.txt,.tsv';
+        _uploadInput.style.display = 'none';
+
+        var _uploadBtn = document.createElement('button');
+        _uploadBtn.textContent = 'Upload file';
+        _uploadBtn.title = 'Charger un fichier (CSV/TXT) et afficher ses objets';
+        _uploadBtn.style.cssText = _btnSt + 'background:#1a3a5c;color:white;';
+        _uploadBtn.onclick = function() { _uploadInput.click(); };
+
+        var _uploadClear = document.createElement('button');
+        _uploadClear.textContent = 'Clear import';
+        _uploadClear.title = 'Retirer les objets importés';
+        _uploadClear.style.cssText = _btnSt + 'background:white;color:#1a3a5c;';
+        _uploadClear.style.display = 'none';
+
+        var _uploadMsg = document.createElement('span');
+        _uploadMsg.style.cssText = 'font-size:11px;font-family:Arial;color:#1a3a5c;';
+
+        var _uploadedTraces = [];  // indices des traces importées
+
+        // Découpe une ligne en champs : détecte virgule, point-virgule,
+        // tabulation, sinon espaces multiples ; retire les guillemets.
+        function _splitLine(line) {
+            var sep = null;
+            if (line.indexOf(',') >= 0) sep = ',';
+            else if (line.indexOf(';') >= 0) sep = ';';
+            else if (line.indexOf('\\t') >= 0) sep = '\\t';
+            var parts = sep ? line.split(sep) : line.trim().split(/\\s+/);
+            return parts.map(function(s) { return s.trim().replace(/^"|"$/g, ''); });
+        }
+
+        function _parseCSV(text) {
+            var lines = text.split(/\\r\\n|\\r|\\n/).filter(function(l) { return l.trim().length; });
+            if (!lines.length) return null;
+            var header = _splitLine(lines[0]);
+            var rows = [];
+            for (var i = 1; i < lines.length; i++) rows.push(_splitLine(lines[i]));
+            return {header: header, rows: rows};
+        }
+
+        _uploadInput.onchange = function(ev) {
+            var file = ev.target.files && ev.target.files[0];
+            if (!file) return;
+            var reader = new FileReader();
+            reader.onload = function(e) {
+                var parsed = _parseCSV(e.target.result);
+                if (!parsed || !parsed.header.length) {
+                    _uploadMsg.textContent = 'fichier illisible'; _uploadInput.value = ''; return;
+                }
+                var hdr = parsed.header;
+
+                // ── Modal de sélection des colonnes ──────────────────────────
+                var _modal = document.createElement('div');
+                _modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;' +
+                    'background:rgba(0,0,0,0.45);z-index:9999;display:flex;' +
+                    'align-items:center;justify-content:center;';
+
+                var _box = document.createElement('div');
+                _box.style.cssText = 'background:white;border-radius:6px;padding:18px 20px;' +
+                    'min-width:320px;box-shadow:0 4px 20px rgba(0,0,0,0.35);' +
+                    'font-family:Arial;font-size:12px;';
+
+                var _mtitle = document.createElement('div');
+                _mtitle.textContent = 'Colonnes — ' + file.name;
+                _mtitle.style.cssText = 'font-weight:bold;font-size:12px;color:#1a3a5c;' +
+                    'margin-bottom:14px;word-break:break-all;';
+                _box.appendChild(_mtitle);
+
+                function _makeRow(labelTxt, isOptional) {
+                    var row = document.createElement('div');
+                    row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:9px;';
+                    var lbl = document.createElement('span');
+                    lbl.textContent = labelTxt + (isOptional ? ' (opt.)' : '') + ' :';
+                    lbl.style.cssText = 'width:110px;color:#1a3a5c;flex-shrink:0;' +
+                        'font-weight:' + (isOptional ? 'normal' : 'bold') + ';';
+                    var sel = document.createElement('select');
+                    sel.style.cssText = 'flex:1;font-size:11px;font-family:Arial;' +
+                        'padding:4px 6px;border:1px solid #8899aa;border-radius:3px;outline:none;';
+                    if (isOptional) {
+                        var eOpt = document.createElement('option');
+                        eOpt.value = ''; eOpt.textContent = '— aucun —';
+                        sel.appendChild(eOpt);
+                    }
+                    for (var h = 0; h < hdr.length; h++) {
+                        var opt = document.createElement('option');
+                        opt.value = hdr[h]; opt.textContent = hdr[h];
+                        sel.appendChild(opt);
+                    }
+                    row.appendChild(lbl); row.appendChild(sel);
+                    _box.appendChild(row);
+                    return sel;
+                }
+
+                var selX = _makeRow('Colonne X', false);
+                var selY = _makeRow('Colonne Y', false);
+                var selZ = _makeRow('Colonne Z', false);
+                var selN = _makeRow('Nom des objets', true);
+
+                // Sélecteur de repère des coordonnées du fichier.
+                //  • mw  : galactocentrique (origine = Voie Lactée), affiché tel quel.
+                //  • m31 : base propre à M31 → converti via p_MW = R_M31^T · p_M31 + r_M31.
+                var _frameRow = document.createElement('div');
+                _frameRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:9px;';
+                var _frameLbl = document.createElement('span');
+                _frameLbl.textContent = 'Repère :';
+                _frameLbl.style.cssText = 'width:110px;color:#1a3a5c;flex-shrink:0;font-weight:bold;';
+                var selFrame = document.createElement('select');
+                selFrame.style.cssText = 'flex:1;font-size:11px;font-family:Arial;' +
+                    'padding:4px 6px;border:1px solid #8899aa;border-radius:3px;outline:none;';
+                var _frOpts = [
+                    {v: 'mw',  t: 'Voie Lactée '},
+                    {v: 'm31', t: 'M31 '}
+                ];
+                for (var fo = 0; fo < _frOpts.length; fo++) {
+                    var _foOpt = document.createElement('option');
+                    _foOpt.value = _frOpts[fo].v; _foOpt.textContent = _frOpts[fo].t;
+                    selFrame.appendChild(_foOpt);
+                }
+                _frameRow.appendChild(_frameLbl); _frameRow.appendChild(selFrame);
+                _box.appendChild(_frameRow);
+
+                // Pré-sélection automatique par mot-clé
+                function _trySelect(sel, keys) {
+                    for (var k = 0; k < keys.length; k++) {
+                        for (var h = 0; h < hdr.length; h++) {
+                            if (hdr[h].toLowerCase().indexOf(keys[k]) >= 0) {
+                                sel.value = hdr[h]; return;
+                            }
+                        }
+                    }
+                }
+                _trySelect(selX, ['gx','_x','xpos','pos_x','x_kpc']);
+                _trySelect(selY, ['gy','_y','ypos','pos_y','y_kpc']);
+                _trySelect(selZ, ['gz','_z','zpos','pos_z','z_kpc']);
+                _trySelect(selN, ['name','nom','id','label','objet']);
+
+                var _btnRow = document.createElement('div');
+                _btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:14px;';
+
+                var _cancelBtn = document.createElement('button');
+                _cancelBtn.textContent = 'Annuler';
+                _cancelBtn.style.cssText = 'padding:5px 12px;font-size:11px;font-family:Arial;' +
+                    'cursor:pointer;border:1px solid #8899aa;border-radius:4px;' +
+                    'background:white;color:#1a3a5c;';
+                _cancelBtn.onclick = function() {
+                    document.body.removeChild(_modal); _uploadInput.value = '';
+                };
+
+                var _loadBtn = document.createElement('button');
+                _loadBtn.textContent = 'Charger';
+                _loadBtn.style.cssText = 'padding:5px 12px;font-size:11px;font-family:Arial;' +
+                    'cursor:pointer;border:1px solid #8899aa;border-radius:4px;' +
+                    'background:#1a3a5c;color:white;';
+                _loadBtn.onclick = function() {
+                    document.body.removeChild(_modal);
+                    var cx = selX.value, cy = selY.value, cz = selZ.value, cn = selN.value;
+                    var frame = selFrame.value;
+
+                    // Convertit des coordonnées centrées M31 (base propre à M31)
+                    // vers le repère galactique affiché : p_MW = R_M31^T · p_M31 + r_M31.
+                    function _m31ToMW(px, py, pz) {
+                        var R = _R_M31;
+                        return [
+                            R[0]*px + R[3]*py + R[6]*pz + _M31_GX,
+                            R[1]*px + R[4]*py + R[7]*pz + _M31_GY,
+                            R[2]*px + R[5]*py + R[8]*pz + _M31_GZ
+                        ];
+                    }
+
+                    function _idx(name) {
+                        if (!name) return -1;
+                        var t = name.trim().toLowerCase();
+                        for (var k = 0; k < hdr.length; k++) {
+                            if (hdr[k].trim().toLowerCase() === t) return k;
+                        }
+                        return -1;
+                    }
+                    var ix = _idx(cx), iy = _idx(cy), iz = _idx(cz), iname = _idx(cn);
+                    if (ix < 0 || iy < 0 || iz < 0) {
+                        _uploadMsg.textContent = 'colonne introuvable'; _uploadInput.value = ''; return;
+                    }
+
+                    var X = [], Y = [], Z = [], lon = [], lat = [], names = [], hov = [];
+                    for (var r = 0; r < parsed.rows.length; r++) {
+                        var row = parsed.rows[r];
+                        var x = parseFloat(row[ix]), y = parseFloat(row[iy]), z = parseFloat(row[iz]);
+                        if (isNaN(x) || isNaN(y) || isNaN(z)) continue;
+                        if (frame === 'm31') {
+                            var _mw = _m31ToMW(x, y, z);
+                            x = _mw[0]; y = _mw[1]; z = _mw[2];
+                        }
+                        var nm = (iname >= 0 && row[iname]) ? row[iname] : ('object ' + (r + 1));
+                        X.push(x); Y.push(y); Z.push(z); names.push(nm);
+                        var rr = Math.sqrt(x*x + y*y + z*z);
+                        lon.push(Math.atan2(y, x) * 180 / Math.PI);
+                        lat.push(rr > 0 ? Math.asin(z / rr) * 180 / Math.PI : 0);
+                        hov.push(nm + '<br>X : ' + x.toFixed(1) + ' kpc<br>Y : ' +
+                                 y.toFixed(1) + ' kpc<br>Z : ' + z.toFixed(1) +
+                                 ' kpc<br><br>\\u25c6 imported');
+                    }
+                    if (!X.length) {
+                        _uploadMsg.textContent = 'aucune donnée valide'; _uploadInput.value = ''; return;
+                    }
+
+                    // Nom court pour la légende : retire l'extension et tronque.
+                    var _base = file.name.replace(/\\.[^.]+$/, '');
+                    if (_base.length > 14) _base = _base.slice(0, 13) + '\\u2026';
+                    var _label = '\\u25c6 ' + _base;
+                    var trace3d = {
+                        type: 'scatter3d', mode: 'markers',
+                        x: X, y: Y, z: Z, scene: 'scene',
+                        marker: {size: 0.4, color: 'magenta', symbol: 'diamond',
+                                 line: {color: '#600060', width: 0.1}},
+                        name: _label, text: hov, hoverinfo: 'text', showlegend: true
+                    };
+                    var traceGeo = {
+                        type: 'scattergeo', mode: 'markers',
+                        lon: lon, lat: lat, geo: 'geo',
+                        marker: {size: 0.5, color: 'magenta', symbol: 'diamond',
+                                 line: {color: '#600060', width: 0.1}},
+                        name: _label, text: hov, hoverinfo: 'text', showlegend: false
+                    };
+                    var before = gd.data.length;
+                    Plotly.addTraces(gd, [trace3d, traceGeo]).then(function() {
+                        _uploadedTraces.push(before, before + 1);
+                    });
+                    _uploadMsg.textContent = X.length + ' objets importés';
+                    _uploadClear.style.display = '';
+                    _uploadInput.value = '';
+                };
+
+                _btnRow.appendChild(_cancelBtn);
+                _btnRow.appendChild(_loadBtn);
+                _box.appendChild(_btnRow);
+                _modal.appendChild(_box);
+                document.body.appendChild(_modal);
+            };
+            reader.readAsText(file);
+        };
+
+        _uploadClear.onclick = function() {
+            if (_uploadedTraces.length) {
+                var idx = _uploadedTraces.slice().sort(function(a, b) { return b - a; });
+                Plotly.deleteTraces(gd, idx);
+                _uploadedTraces = [];
+            }
+            _uploadMsg.textContent = '';
+            _uploadClear.style.display = 'none';
+        };
+
+        var _uploadWrap = document.createElement('div');
+        _uploadWrap.style.cssText = 'display:flex;gap:5px;align-items:center;flex-wrap:wrap;';
+        _uploadWrap.appendChild(_uploadBtn);
+        _uploadWrap.appendChild(_uploadClear);
+        _uploadWrap.appendChild(_uploadMsg);
+        _uploadWrap.appendChild(_uploadInput);
+
+        // Panneau unique (recherche + navigation), ancré en bas à gauche,
+        // immobile (position:fixed) et hors de la légende 3D (en haut à gauche).
+        var _ctrlPanel = document.createElement('div');
+        _ctrlPanel.style.cssText = 'position:fixed;bottom:12px;left:12px;z-index:1001;' +
+            'display:flex;flex-direction:column;gap:6px;background:rgba(255,255,255,0.92);' +
+            'padding:8px;border:1px solid #8899aa;border-radius:4px;';
+        _ctrlPanel.appendChild(_searchWrap);
+        _ctrlPanel.appendChild(_filterWrap);
+        _ctrlPanel.appendChild(_uploadWrap);
+        _ctrlPanel.appendChild(_nav);
+        document.body.appendChild(_ctrlPanel);
     }
 
     if (document.readyState === 'complete') setup();
@@ -1758,12 +2501,45 @@ _RESPONSIVE_CSS = (
 )
 _html = _html.replace("</head>", _RESPONSIVE_CSS + "</head>")
 
+# ── Table des positions (kpc) pour le filtre par rayon ────────────────────
+# name -> [gx, gy, gz] ; inclut MW / M31 / M33 et toutes les galaxies.
+import json as _json
+
+_pos_map = {}
+for _df in (df_pm, df_nopm):
+    for _, _row in _df.iterrows():
+        _gx, _gy, _gz = _row["gx"], _row["gy"], _row["gz"]
+        if pd.isna(_gx) or pd.isna(_gy) or pd.isna(_gz):
+            continue
+        _pos_map[str(_row["name"])] = [round(float(_gx), 2),
+                                       round(float(_gy), 2),
+                                       round(float(_gz), 2)]
+
+_pos_map["Milky Way"]      = [0.0, 0.0, 0.0]
+_pos_map["M31 Andromeda"]  = [round(float(_m31_gx), 2), round(float(_m31_gy), 2), round(float(_m31_gz), 2)]
+_pos_map["M33 Triangulum"] = [round(float(_m33_gx), 2), round(float(_m33_gy), 2), round(float(_m33_gz), 2)]
+
+# Objets de référence : repères majeurs en tête, puis toutes les galaxies triées.
+_anchors   = ["Milky Way", "M31 Andromeda", "M33 Triangulum"]
+_others    = sorted([n for n in _pos_map if n not in _anchors], key=str.lower)
+_ref_names = _anchors + _others
+
+_FILTER_VARS = (
+    "<script>var _POS=" + _json.dumps(_pos_map)
+    + ";var _REF_NAMES=" + _json.dumps(_ref_names) + ";</script>\n"
+)
+
 _M31_VARS = (f'<script>var _M31_GX={_m31_gx:.1f},_M31_GY={_m31_gy:.1f},_M31_GZ={_m31_gz:.1f};</script>\n')
 _SCALE_VARS = (
     f'<script>var _SCALE_MAIN={_SCALE_MAIN},_SCALE_T0={_SCALE_T0},_SCALE_T1={_SCALE_T1},'
     f'_BAR_XC={_bar_xc:.5f},_BAR_HALF={_bar_half:.5f},_BAR_Y={_bar_y:.5f},_TICK_H={_tick_h:.5f};</script>\n'
 )
-_html = _html.replace("</body>", _M31_VARS + _SCALE_VARS + _JS + "\n</body>")
+_M31_ROT_VARS = (
+    '<script>var _R_M31=['
+    + ','.join(f'{v:.8f}' for v in _R_m31.flatten())
+    + '];</script>\n'
+)
+_html = _html.replace("</body>", _FILTER_VARS + _M31_VARS + _SCALE_VARS + _M31_ROT_VARS + _JS + "\n</body>")
 
 with open(_out, "w", encoding="utf-8") as f:
     f.write(_html)
